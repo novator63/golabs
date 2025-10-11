@@ -57,7 +57,7 @@ func main() {
 		fmt.Println("[factorial] готово")
 	}()
 
-		go func() {
+	go func() {
 		defer wg.Done()
 		fmt.Println("[random] старт")
 		rndRes = generateRandom(8)

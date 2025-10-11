@@ -2,42 +2,48 @@ package main
 
 import (
 	"fmt"
-	"lab3/mathutils"
-	"lab3/stringutils"
+	// "lab3/mathutils"
+	// "lab3/stringutils"
 )
 
 func main() {
 
-	n := 0
-	fmt.Scanf("%d", &n)
-	fmt.Printf("%d! = %d\n", n, mathutils.Factorial(n))
+	//Задание 1-3
+	// n := 0
+	// fmt.Scanf("%d", &n)
+	// fmt.Printf("%d! = %d\n", n, mathutils.Factorial(n))
 
-	fmt.Println(stringutils.Reverse("Hello, world!"))
+	// fmt.Println(stringutils.Reverse("Hello, world!"))
 
-	var arr [5]int
+	//Задиние 4
+	// var arr [5]int
 
-	for i := 0; i < len(arr); i++ {
-		arr[i] = i
-	}
+	// for i := 0; i < len(arr); i++ {
+	// 	arr[i] = i
+	// }
 
-	fmt.Println(arr)
+	// fmt.Println(arr)
 
-	slice := []int{1, 2, 3, 4, 5}
+	//Задание 5
 
-	slice = append(slice, 6, 7, 8)
+	// slice := []int{1, 2, 3, 4, 5}
 
-	fmt.Println(slice)
+	// slice = append(slice, 6, 7, 8)
+	// fmt.Println("После добавления 6,7,8:", slice)
 
-	slice = slice[1:6]
+	// slice = slice[1:6]
+	// fmt.Println("После обрезки [1:6]:", slice)
 
-	fmt.Println(slice)
+	// m := 2
 
-	m := 2
+	// slice = append(slice[:m], slice[m+1:]...)
+	// fmt.Println("После удаления элемента по индексу", m, ":", slice)
 
-	slice = append(slice[:m], slice[m+1:]...)
+	// value := 99
+	// slice = append(slice[:m], append([]int{value}, slice[m:]...)...)
+	// fmt.Println("После добавления элемента 99 по индексу", m, ":", slice)
 
-	fmt.Println(slice)
-
+	//Задиние 6
 	notes := []string{"каждый", "охотник", "желает", "знать", "где", "сидит", "фазан"}
 
 	var longest string

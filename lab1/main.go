@@ -43,5 +43,4 @@ func main() {
 	x1, x2, x3 := 10.0, 20.0, 30.0
 	avg := (x1 + x2 + x3) / 3
 	fmt.Println(avg)
-
 }
