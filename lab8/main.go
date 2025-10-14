@@ -22,7 +22,7 @@ var db *sql.DB
 
 func main() {
 	// Подключение к базе данных
-	connStr := "user=postgres password=12345 dbname=usersdb sslmode=disable"
+	connStr := "user=postgres password=postgres dbname=usersdb sslmode=disable"
 	var err error
 	db, err = sql.Open("postgres", connStr)
 	if err != nil {
