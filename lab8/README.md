@@ -37,3 +37,27 @@ curl -X POST http://localhost:8080/users \
 
 {"error":"Имя не может быть пустым"}
 {"error":"Возраст должен быть положительным числом"}
+
+lab8-4
+
+curl -X POST http://localhost:8080/users -H "Content-Type: application/json" -d '{"name":"Ivan","age":25}'
+curl -X POST http://localhost:8080/users -H "Content-Type: application/json" -d '{"name":"Petr","age":30}'
+curl -X POST http://localhost:8080/users -H "Content-Type: application/json" -d '{"name":"Anna","age":22}'
+curl -X POST http://localhost:8080/users -H "Content-Type: application/json" -d '{"name":"Sergey","age":30}'
+curl -X POST http://localhost:8080/users -H "Content-Type: application/json" -d '{"name":"Ilya","age":25}'
+
+curl "http://localhost:8080/users?page=1&limit=2"
+
+→ Вернёт первых двух пользователей 
+
+curl "http://localhost:8080/users?page=1&limit=2"
+
+→ Вернёт следующих двух пользователей
+
+curl "http://localhost:8080/users?name=an"
+
+→ вернёт всех, где имя содержит “an” (например, Ivan, Anna)
+
+curl "http://localhost:8080/users?age=30"
+
+→ вернёт всех пользователей, которым 30 лет

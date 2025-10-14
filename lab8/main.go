@@ -12,6 +12,9 @@ import (
 	_ "github.com/lib/pq"
 )
 
+// ---------------------------
+// Структура пользователя
+// ---------------------------
 type User struct {
 	ID   int    `json:"id"`
 	Name string `json:"name"`
@@ -20,8 +23,10 @@ type User struct {
 
 var db *sql.DB
 
+// ---------------------------
+// Главная функция
+// ---------------------------
 func main() {
-	// Подключение к базе данных
 	connStr := "user=postgres password=postgres dbname=usersdb sslmode=disable"
 	var err error
 	db, err = sql.Open("postgres", connStr)
@@ -30,16 +35,14 @@ func main() {
 	}
 	defer db.Close()
 
-	// Проверяем соединение
 	if err = db.Ping(); err != nil {
 		log.Fatal("Не удалось подключиться к базе данных:", err)
 	}
 	log.Println("Подключение к базе данных успешно!")
 
-	// Настройка маршрутов
 	r := mux.NewRouter()
 	r.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("REST API with PostgreSQL is running"))
+		w.Write([]byte("REST API with PostgreSQL, validation, pagination and filtering"))
 	})
 	r.HandleFunc("/users", getUsers).Methods("GET")
 	r.HandleFunc("/users/{id}", getUser).Methods("GET")
@@ -47,7 +50,6 @@ func main() {
 	r.HandleFunc("/users/{id}", updateUser).Methods("PUT")
 	r.HandleFunc("/users/{id}", deleteUser).Methods("DELETE")
 
-	// Запуск сервера
 	log.Println("Сервер запущен на порту 8080")
 	http.ListenAndServe(":8080", r)
 }
@@ -68,14 +70,75 @@ func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
 }
 
 // ---------------------------
+// Валидация пользователя
+// ---------------------------
+func validateUser(u User) (bool, string) {
+	u.Name = strings.TrimSpace(u.Name)
+	if u.Name == "" {
+		return false, "Имя не может быть пустым"
+	}
+	if len(u.Name) > 50 {
+		return false, "Имя слишком длинное (максимум 50 символов)"
+	}
+	for _, ch := range u.Name {
+		if ch >= '0' && ch <= '9' {
+			return false, "Имя не должно содержать цифр"
+		}
+	}
+	if u.Age <= 0 || u.Age > 120 {
+		return false, "Некорректный возраст"
+	}
+	return true, ""
+}
+
+// ---------------------------
 // Обработчики маршрутов
 // ---------------------------
 
-// Получить всех пользователей
+// Получить всех пользователей с пагинацией и фильтрацией
 func getUsers(w http.ResponseWriter, r *http.Request) {
-	rows, err := db.Query("SELECT id, name, age FROM users")
+	// Параметры запроса
+	pageParam := r.URL.Query().Get("page")
+	limitParam := r.URL.Query().Get("limit")
+	nameFilter := r.URL.Query().Get("name")
+	ageFilter := r.URL.Query().Get("age")
+
+	// Значения по умолчанию
+	page := 1
+	limit := 5
+	if p, err := strconv.Atoi(pageParam); err == nil && p > 0 {
+		page = p
+	}
+	if l, err := strconv.Atoi(limitParam); err == nil && l > 0 {
+		limit = l
+	}
+	offset := (page - 1) * limit
+
+	// Формируем SQL-запрос с фильтрацией
+	query := "SELECT id, name, age FROM users WHERE 1=1"
+	var args []interface{}
+	argIndex := 1
+
+	if nameFilter != "" {
+		query += " AND name ILIKE $" + strconv.Itoa(argIndex)
+		args = append(args, "%"+nameFilter+"%")
+		argIndex++
+	}
+
+	if ageFilter != "" {
+		if age, err := strconv.Atoi(ageFilter); err == nil {
+			query += " AND age = $" + strconv.Itoa(argIndex)
+			args = append(args, age)
+			argIndex++
+		}
+	}
+
+	query += " ORDER BY id LIMIT $" + strconv.Itoa(argIndex) + " OFFSET $" + strconv.Itoa(argIndex+1)
+	args = append(args, limit, offset)
+
+	rows, err := db.Query(query, args...)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Ошибка базы данных")
+		respondWithError(w, http.StatusInternalServerError, "Ошибка выполнения запроса")
 		return
 	}
 	defer rows.Close()
@@ -89,7 +152,12 @@ func getUsers(w http.ResponseWriter, r *http.Request) {
 		}
 		users = append(users, u)
 	}
-	respondWithJSON(w, http.StatusOK, users)
+
+	respondWithJSON(w, http.StatusOK, map[string]interface{}{
+		"page":  page,
+		"limit": limit,
+		"users": users,
+	})
 }
 
 // Получить пользователя по ID
@@ -115,26 +183,17 @@ func createUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Валидация
-	u.Name = strings.TrimSpace(u.Name)
-	if u.Name == "" {
-		respondWithError(w, http.StatusBadRequest, "Имя не может быть пустым")
-		return
-	}
-	if u.Age <= 0 {
-		respondWithError(w, http.StatusBadRequest, "Возраст должен быть положительным числом")
+	ok, msg := validateUser(u)
+	if !ok {
+		respondWithError(w, http.StatusBadRequest, msg)
 		return
 	}
 
-	err := db.QueryRow(
-		"INSERT INTO users (name, age) VALUES ($1, $2) RETURNING id",
-		u.Name, u.Age,
-	).Scan(&u.ID)
+	err := db.QueryRow("INSERT INTO users (name, age) VALUES ($1, $2) RETURNING id", u.Name, u.Age).Scan(&u.ID)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Ошибка вставки в базу")
 		return
 	}
-
 	respondWithJSON(w, http.StatusCreated, u)
 }
 
@@ -147,14 +206,9 @@ func updateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Валидация
-	u.Name = strings.TrimSpace(u.Name)
-	if u.Name == "" {
-		respondWithError(w, http.StatusBadRequest, "Имя не может быть пустым")
-		return
-	}
-	if u.Age <= 0 {
-		respondWithError(w, http.StatusBadRequest, "Возраст должен быть положительным числом")
+	ok, msg := validateUser(u)
+	if !ok {
+		respondWithError(w, http.StatusBadRequest, msg)
 		return
 	}
 
