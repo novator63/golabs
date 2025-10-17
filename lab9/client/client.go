@@ -9,26 +9,30 @@ import (
 	"os"
 )
 
-// Структура пользователя
 type User struct {
-	ID   int    `json:"id"`
-	Name string `json:"name"`
-	Age  int    `json:"age"`
+	ID       int    `json:"id"`
+	Name     string `json:"name"`
+	Age      int    `json:"age"`
+	Username string `json:"username"`
+	Password string `json:"password,omitempty"`
 }
 
-const baseURL = "http://localhost:8080/users"
+const baseURL = "http://localhost:8080"
 
-// ---------------------------
-// Основное меню
-// ---------------------------
+var userTokens = make(map[string]string) // username → token
+var currentUser string                   // имя текущего активного пользователя
+
 func main() {
 	for {
 		fmt.Println("\n=== КЛИЕНТ REST API ===")
-		fmt.Println("1. Показать всех пользователей")
-		fmt.Println("2. Найти пользователя по ID")
-		fmt.Println("3. Добавить нового пользователя")
-		fmt.Println("4. Обновить данные пользователя")
-		fmt.Println("5. Удалить пользователя")
+		fmt.Println("1. Авторизация (логин)")
+		fmt.Println("2. Сменить активного пользователя")
+		fmt.Println("3. Показать всех пользователей")
+		fmt.Println("4. Найти пользователя по ID")
+		fmt.Println("5. Добавить нового пользователя")
+		fmt.Println("6. Обновить данные пользователя")
+		fmt.Println("7. Удалить пользователя")
+		fmt.Println("8. Показать сохранённые токены")
 		fmt.Println("0. Выход")
 
 		fmt.Print("Выберите действие: ")
@@ -37,130 +41,185 @@ func main() {
 
 		switch choice {
 		case 1:
-			getAllUsers()
+			login()
 		case 2:
-			getUserByID()
+			switchUser()
 		case 3:
-			createUser()
+			getAllUsers()
 		case 4:
-			updateUser()
+			getUserByID()
 		case 5:
+			createUser()
+		case 6:
+			updateUser()
+		case 7:
 			deleteUser()
+		case 8:
+			printTokens()
 		case 0:
-			fmt.Println("Выход из программы.")
+			fmt.Println("Выход.")
 			os.Exit(0)
 		default:
-			fmt.Println("Неверный выбор, попробуйте снова.")
+			fmt.Println("Неверный выбор.")
 		}
 	}
 }
 
-// ---------------------------
-// 1. Получение всех пользователей
-// ---------------------------
-func getAllUsers() {
-	resp, err := http.Get(baseURL)
+// ---------------- Авторизация ----------------
+func login() {
+	var username, password string
+	fmt.Print("Введите логин: ")
+	fmt.Scan(&username)
+	fmt.Print("Введите пароль: ")
+	fmt.Scan(&password)
+
+	data, _ := json.Marshal(map[string]string{
+		"username": username,
+		"password": password,
+	})
+
+	resp, err := http.Post(baseURL+"/login", "application/json", bytes.NewBuffer(data))
 	if err != nil {
-		fmt.Println("Ошибка запроса:", err)
+		fmt.Println("Ошибка:", err)
 		return
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
-	fmt.Println("\nОтвет сервера:\n", string(body))
+	if resp.StatusCode != 200 {
+		fmt.Println("Ошибка авторизации:", string(body))
+		return
+	}
+
+	var result map[string]string
+	json.Unmarshal(body, &result)
+	token := result["token"]
+
+	userTokens[username] = token
+	currentUser = username
+
+	fmt.Printf("✅ Пользователь '%s' авторизован.\n", username)
+	fmt.Printf("Токен сохранён: %s\n", token)
 }
 
-// ---------------------------
-// 2. Получение пользователя по ID
-// ---------------------------
+// ---------------- Смена пользователя ----------------
+func switchUser() {
+	if len(userTokens) == 0 {
+		fmt.Println("Нет авторизованных пользователей.")
+		return
+	}
+
+	fmt.Println("Доступные пользователи:")
+	for u := range userTokens {
+		fmt.Println("-", u)
+	}
+	fmt.Print("Введите имя пользователя для активации: ")
+	var name string
+	fmt.Scan(&name)
+
+	if _, ok := userTokens[name]; !ok {
+		fmt.Println("Такого пользователя нет в списке.")
+		return
+	}
+
+	currentUser = name
+	fmt.Printf("🔄 Активный пользователь: %s\n", currentUser)
+}
+
+// ---------------- CRUD ----------------
+func getAllUsers() {
+	req, _ := http.NewRequest("GET", baseURL+"/users", nil)
+	addAuth(req)
+	send(req)
+}
+
 func getUserByID() {
 	var id int
-	fmt.Print("Введите ID пользователя: ")
+	fmt.Print("Введите ID: ")
 	fmt.Scan(&id)
-
-	resp, err := http.Get(fmt.Sprintf("%s/%d", baseURL, id))
-	if err != nil {
-		fmt.Println("Ошибка запроса:", err)
-		return
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	fmt.Println("\nОтвет сервера:\n", string(body))
+	req, _ := http.NewRequest("GET", fmt.Sprintf("%s/users/%d", baseURL, id), nil)
+	addAuth(req)
+	send(req)
 }
 
-// ---------------------------
-// 3. Добавление пользователя
-// ---------------------------
 func createUser() {
-	var user User
-	fmt.Print("Введите имя: ")
-	fmt.Scan(&user.Name)
-	fmt.Print("Введите возраст: ")
-	fmt.Scan(&user.Age)
+	var u User
+	fmt.Print("Имя: ")
+	fmt.Scan(&u.Name)
+	fmt.Print("Возраст: ")
+	fmt.Scan(&u.Age)
+	fmt.Print("Логин: ")
+	fmt.Scan(&u.Username)
+	fmt.Print("Пароль: ")
+	fmt.Scan(&u.Password)
 
-	data, _ := json.Marshal(user)
-	resp, err := http.Post(baseURL, "application/json", bytes.NewBuffer(data))
-	if err != nil {
-		fmt.Println("Ошибка запроса:", err)
-		return
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	fmt.Println("\nОтвет сервера:\n", string(body))
+	data, _ := json.Marshal(u)
+	req, _ := http.NewRequest("POST", baseURL+"/users", bytes.NewBuffer(data))
+	req.Header.Set("Content-Type", "application/json")
+	addAuth(req)
+	send(req)
 }
 
-// ---------------------------
-// 4. Обновление пользователя
-// ---------------------------
 func updateUser() {
 	var id int
-	var user User
+	var u User
 	fmt.Print("Введите ID пользователя для обновления: ")
 	fmt.Scan(&id)
-	fmt.Print("Введите новое имя: ")
-	fmt.Scan(&user.Name)
-	fmt.Print("Введите новый возраст: ")
-	fmt.Scan(&user.Age)
+	fmt.Print("Новое имя: ")
+	fmt.Scan(&u.Name)
+	fmt.Print("Новый возраст: ")
+	fmt.Scan(&u.Age)
 
-	data, _ := json.Marshal(user)
-	req, _ := http.NewRequest("PUT", fmt.Sprintf("%s/%d", baseURL, id), bytes.NewBuffer(data))
+	data, _ := json.Marshal(u)
+	req, _ := http.NewRequest("PUT", fmt.Sprintf("%s/users/%d", baseURL, id), bytes.NewBuffer(data))
 	req.Header.Set("Content-Type", "application/json")
+	addAuth(req)
+	send(req)
+}
 
+func deleteUser() {
+	var id int
+	fmt.Print("Введите ID для удаления: ")
+	fmt.Scan(&id)
+	req, _ := http.NewRequest("DELETE", fmt.Sprintf("%s/users/%d", baseURL, id), nil)
+	addAuth(req)
+	send(req)
+}
+
+// ---------------- Вспомогательные функции ----------------
+func addAuth(req *http.Request) {
+	if currentUser == "" {
+		fmt.Println("⚠️ Сначала выполните авторизацию.")
+		return
+	}
+	token := userTokens[currentUser]
+	req.Header.Set("Authorization", "Bearer "+token)
+}
+
+func send(req *http.Request) {
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Println("Ошибка запроса:", err)
+		fmt.Println("Ошибка:", err)
 		return
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
-	fmt.Println("\nОтвет сервера:\n", string(body))
+	fmt.Printf("\nОтвет (%d): %s\n", resp.StatusCode, string(body))
 }
 
-// ---------------------------
-// 5. Удаление пользователя
-// ---------------------------
-func deleteUser() {
-	var id int
-	fmt.Print("Введите ID пользователя для удаления: ")
-	fmt.Scan(&id)
-
-	req, _ := http.NewRequest("DELETE", fmt.Sprintf("%s/%d", baseURL, id), nil)
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		fmt.Println("Ошибка запроса:", err)
+func printTokens() {
+	if len(userTokens) == 0 {
+		fmt.Println("Нет сохранённых токенов.")
 		return
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNoContent {
-		fmt.Println("Пользователь успешно удалён.")
-	} else {
-		body, _ := io.ReadAll(resp.Body)
-		fmt.Println("Ответ сервера:", string(body))
+	fmt.Println("\nСохранённые токены:")
+	for user, token := range userTokens {
+		active := ""
+		if user == currentUser {
+			active = "(активен)"
+		}
+		fmt.Printf("- %s: %s %s\n", user, token, active)
 	}
 }

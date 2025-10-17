@@ -7,18 +7,19 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	_ "github.com/lib/pq"
 )
 
-// ---------------------------
-// Структура пользователя
-// ---------------------------
 type User struct {
-	ID   int    `json:"id"`
-	Name string `json:"name"`
-	Age  int    `json:"age"`
+	ID       int    `json:"id"`
+	Username string `json:"username"`
+	Password string `json:"password,omitempty"`
+	Name     string `json:"name"`
+	Age      int    `json:"age"`
 }
 
 var db *sql.DB
@@ -41,17 +42,80 @@ func main() {
 	log.Println("Подключение к базе данных успешно!")
 
 	r := mux.NewRouter()
-	r.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("REST API with PostgreSQL, validation, pagination and filtering"))
-	})
-	r.HandleFunc("/users", getUsers).Methods("GET")
-	r.HandleFunc("/users/{id}", getUser).Methods("GET")
-	r.HandleFunc("/users", createUser).Methods("POST")
-	r.HandleFunc("/users/{id}", updateUser).Methods("PUT")
-	r.HandleFunc("/users/{id}", deleteUser).Methods("DELETE")
+
+	// Публичный маршрут — логин
+	r.HandleFunc("/login", loginHandler).Methods("POST")
+
+	// Защищённые маршруты
+	api := r.PathPrefix("/").Subrouter()
+	api.Use(authMiddleware)
+	api.HandleFunc("/users", getUsers).Methods("GET")
+	api.HandleFunc("/users/{id}", getUser).Methods("GET")
+	api.HandleFunc("/users", createUser).Methods("POST")
+	api.HandleFunc("/users/{id}", updateUser).Methods("PUT")
+	api.HandleFunc("/users/{id}", deleteUser).Methods("DELETE")
 
 	log.Println("Сервер запущен на порту 8080")
 	http.ListenAndServe(":8080", r)
+}
+
+// ---------------------------
+// Авторизация и middleware
+// ---------------------------
+func loginHandler(w http.ResponseWriter, r *http.Request) {
+	var creds struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&creds); err != nil {
+		respondWithError(w, http.StatusBadRequest, "Некорректный JSON")
+		return
+	}
+
+	var userID int
+	err := db.QueryRow("SELECT id FROM users WHERE username=$1 AND password=$2",
+		creds.Username, creds.Password).Scan(&userID)
+	if err == sql.ErrNoRows {
+		respondWithError(w, http.StatusUnauthorized, "Неверные учетные данные")
+		return
+	} else if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Ошибка базы данных")
+		return
+	}
+
+	// Генерация уникального токена
+	token := uuid.New().String()
+
+	_, err = db.Exec("INSERT INTO sessions (user_id, token, created_at) VALUES ($1, $2, $3)",
+		userID, token, time.Now())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Ошибка сохранения токена")
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, map[string]string{"token": token})
+}
+
+func authMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if token == "" {
+			respondWithError(w, http.StatusUnauthorized, "Отсутствует токен")
+			return
+		}
+
+		var userID int
+		err := db.QueryRow("SELECT user_id FROM sessions WHERE token=$1", token).Scan(&userID)
+		if err == sql.ErrNoRows {
+			respondWithError(w, http.StatusUnauthorized, "Недействительный токен")
+			return
+		} else if err != nil {
+			respondWithError(w, http.StatusInternalServerError, "Ошибка проверки токена")
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 // ---------------------------
@@ -70,75 +134,12 @@ func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
 }
 
 // ---------------------------
-// Валидация пользователя
+// CRUD
 // ---------------------------
-func validateUser(u User) (bool, string) {
-	u.Name = strings.TrimSpace(u.Name)
-	if u.Name == "" {
-		return false, "Имя не может быть пустым"
-	}
-	if len(u.Name) > 50 {
-		return false, "Имя слишком длинное (максимум 50 символов)"
-	}
-	for _, ch := range u.Name {
-		if ch >= '0' && ch <= '9' {
-			return false, "Имя не должно содержать цифр"
-		}
-	}
-	if u.Age <= 0 || u.Age > 120 {
-		return false, "Некорректный возраст"
-	}
-	return true, ""
-}
-
-// ---------------------------
-// Обработчики маршрутов
-// ---------------------------
-
-// Получить всех пользователей с пагинацией и фильтрацией
 func getUsers(w http.ResponseWriter, r *http.Request) {
-	// Параметры запроса
-	pageParam := r.URL.Query().Get("page")
-	limitParam := r.URL.Query().Get("limit")
-	nameFilter := r.URL.Query().Get("name")
-	ageFilter := r.URL.Query().Get("age")
-
-	// Значения по умолчанию
-	page := 1
-	limit := 5
-	if p, err := strconv.Atoi(pageParam); err == nil && p > 0 {
-		page = p
-	}
-	if l, err := strconv.Atoi(limitParam); err == nil && l > 0 {
-		limit = l
-	}
-	offset := (page - 1) * limit
-
-	// Формируем SQL-запрос с фильтрацией
-	query := "SELECT id, name, age FROM users WHERE 1=1"
-	var args []interface{}
-	argIndex := 1
-
-	if nameFilter != "" {
-		query += " AND name ILIKE $" + strconv.Itoa(argIndex)
-		args = append(args, "%"+nameFilter+"%")
-		argIndex++
-	}
-
-	if ageFilter != "" {
-		if age, err := strconv.Atoi(ageFilter); err == nil {
-			query += " AND age = $" + strconv.Itoa(argIndex)
-			args = append(args, age)
-			argIndex++
-		}
-	}
-
-	query += " ORDER BY id LIMIT $" + strconv.Itoa(argIndex) + " OFFSET $" + strconv.Itoa(argIndex+1)
-	args = append(args, limit, offset)
-
-	rows, err := db.Query(query, args...)
+	rows, err := db.Query("SELECT id, name, age, username FROM users ORDER BY id")
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Ошибка выполнения запроса")
+		respondWithError(w, http.StatusInternalServerError, "Ошибка чтения из базы")
 		return
 	}
 	defer rows.Close()
@@ -146,97 +147,54 @@ func getUsers(w http.ResponseWriter, r *http.Request) {
 	var users []User
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.ID, &u.Name, &u.Age); err != nil {
-			respondWithError(w, http.StatusInternalServerError, "Ошибка чтения данных")
-			return
-		}
+		rows.Scan(&u.ID, &u.Name, &u.Age, &u.Username)
 		users = append(users, u)
 	}
-
-	respondWithJSON(w, http.StatusOK, map[string]interface{}{
-		"page":  page,
-		"limit": limit,
-		"users": users,
-	})
+	respondWithJSON(w, http.StatusOK, users)
 }
 
-// Получить пользователя по ID
 func getUser(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(mux.Vars(r)["id"])
 	var u User
-	err := db.QueryRow("SELECT id, name, age FROM users WHERE id=$1", id).Scan(&u.ID, &u.Name, &u.Age)
+	err := db.QueryRow("SELECT id, name, age, username FROM users WHERE id=$1", id).Scan(&u.ID, &u.Name, &u.Age, &u.Username)
 	if err == sql.ErrNoRows {
 		respondWithError(w, http.StatusNotFound, "Пользователь не найден")
 		return
-	} else if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Ошибка базы данных")
-		return
 	}
 	respondWithJSON(w, http.StatusOK, u)
 }
 
-// Добавить нового пользователя
 func createUser(w http.ResponseWriter, r *http.Request) {
 	var u User
-	if err := json.NewDecoder(r.Body).Decode(&u); err != nil {
-		respondWithError(w, http.StatusBadRequest, "Некорректный JSON")
-		return
-	}
+	json.NewDecoder(r.Body).Decode(&u)
 
-	ok, msg := validateUser(u)
-	if !ok {
-		respondWithError(w, http.StatusBadRequest, msg)
-		return
-	}
-
-	err := db.QueryRow("INSERT INTO users (name, age) VALUES ($1, $2) RETURNING id", u.Name, u.Age).Scan(&u.ID)
+	_, err := db.Exec("INSERT INTO users (name, age, username, password) VALUES ($1, $2, $3, $4)",
+		u.Name, u.Age, u.Username, u.Password)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Ошибка вставки в базу")
+		respondWithError(w, http.StatusInternalServerError, "Ошибка вставки пользователя")
 		return
 	}
-	respondWithJSON(w, http.StatusCreated, u)
+	respondWithJSON(w, http.StatusCreated, map[string]string{"status": "Пользователь добавлен"})
 }
 
-// Обновить пользователя
 func updateUser(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(mux.Vars(r)["id"])
 	var u User
-	if err := json.NewDecoder(r.Body).Decode(&u); err != nil {
-		respondWithError(w, http.StatusBadRequest, "Некорректный JSON")
-		return
-	}
+	json.NewDecoder(r.Body).Decode(&u)
 
-	ok, msg := validateUser(u)
-	if !ok {
-		respondWithError(w, http.StatusBadRequest, msg)
-		return
-	}
-
-	res, err := db.Exec("UPDATE users SET name=$1, age=$2 WHERE id=$3", u.Name, u.Age, id)
+	_, err := db.Exec("UPDATE users SET name=$1, age=$2 WHERE id=$3", u.Name, u.Age, id)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Ошибка базы данных")
+		respondWithError(w, http.StatusInternalServerError, "Ошибка обновления")
 		return
 	}
-	rows, _ := res.RowsAffected()
-	if rows == 0 {
-		respondWithError(w, http.StatusNotFound, "Пользователь не найден")
-		return
-	}
-	u.ID = id
-	respondWithJSON(w, http.StatusOK, u)
+	respondWithJSON(w, http.StatusOK, map[string]string{"status": "Данные обновлены"})
 }
 
-// Удалить пользователя
 func deleteUser(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(mux.Vars(r)["id"])
-	res, err := db.Exec("DELETE FROM users WHERE id=$1", id)
+	_, err := db.Exec("DELETE FROM users WHERE id=$1", id)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Ошибка базы данных")
-		return
-	}
-	rows, _ := res.RowsAffected()
-	if rows == 0 {
-		respondWithError(w, http.StatusNotFound, "Пользователь не найден")
+		respondWithError(w, http.StatusInternalServerError, "Ошибка удаления")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
